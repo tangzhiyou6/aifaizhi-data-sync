@@ -1,0 +1,33 @@
+# 本地联调环境：用 Docker 起两个 Postgres 模拟源端/目标端
+#
+#   docker run -d --name aifsync-src -e POSTGRES_PASSWORD=srcpass -e POSTGRES_USER=dsjsj \
+#     -e POSTGRES_DB=jm_cloud -p 15432:5432 postgres:16
+#   docker run -d --name aifsync-dst -e POSTGRES_PASSWORD=dstpass -e POSTGRES_USER=xcapp \
+#     -e POSTGRES_DB=szsjzzkk -p 15433:5432 postgres:16
+#   docker cp init/init-src-test-data.sql aifsync-src:/tmp/ && docker exec aifsync-src psql -U dsjsj -d jm_cloud -f /tmp/init-src-test-data.sql
+#   docker cp init/init-pg-sql.sql aifsync-dst:/tmp/ && docker exec aifsync-dst psql -U xcapp -d szsjzzkk -f /tmp/init-pg-sql.sql
+#
+# 启动：java -jar target/aifaizhi-data-sync.jar --spring.profiles.active=local
+server:
+  port: 13607
+
+spring:
+  datasource:
+    dynamic:
+      datasource:
+        jm_cloud:
+          url: jdbc:postgresql://127.0.0.1:15432/jm_cloud?currentSchema=dws_dsjsj
+          username: dsjsj
+          password: srcpass
+        szsjzzkk:
+          url: jdbc:postgresql://127.0.0.1:15433/szsjzzkk?currentSchema=xcapp
+          username: xcapp
+          password: dstpass
+
+data-sync:
+  mode: db
+  batch-size: 1000
+  # 本地调试用短间隔，重试日志更密集
+  retry-interval-ms: 500
+  api:
+    base-url: http://127.0.0.1:13607

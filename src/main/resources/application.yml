@@ -1,0 +1,110 @@
+server:
+  port: 13607
+  tomcat:
+    mbeanregistry:
+      enabled: true
+
+spring:
+  application:
+    name: aifaizhi-data-sync
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+    deserialization:
+      fail-on-unknown-properties: false
+
+  # ==================== 多数据源 ====================
+  # 源端库：jm_cloud（spic_base.proj_biz_dm_stg_m + con_file_upload）
+  # 目标端库：szsjzzkk（ods_dsjsj.ods_dsjsj_file_info + ods_dsjsj.ods_dsjsj_file_sync_record）
+  datasource:
+    dynamic:
+      # 默认数据源，未标注 @DS 时使用
+      primary: jm_cloud
+      # 数据源不存在时直接报错，避免误连到默认库
+      strict: true
+      # 懒加载数据源：数据库暂时不可达时不阻塞应用启动
+      lazy: true
+      # @DS 切面优先级，必须高于事务切面，保证事务落在正确的库上
+      aop:
+        order: -2147483648
+      datasource:
+        jm_cloud:
+          driver-class-name: org.postgresql.Driver
+          url: jdbc:postgresql://10.104.11.168:5432/jm_cloud?currentSchema=dws_dsjsj
+          username: dsjsj
+          password: jXY.S9P8QB
+          hikari:
+            pool-name: jm-cloud-pool
+            maximum-pool-size: 10
+            minimum-idle: 2
+            connection-timeout: 30000
+            idle-timeout: 60000
+            max-lifetime: 180000
+            # -1：数据库连不上时不阻塞启动
+            initialization-fail-timeout: -1
+        szsjzzkk:
+          driver-class-name: org.postgresql.Driver
+          url: jdbc:postgresql://10.227.3.245:5432/szsjzzkk?currentSchema=xcapp
+          username: xcapp
+          password: D5c0eFsWXqj_
+          hikari:
+            pool-name: szsjzzkk-pool
+            maximum-pool-size: 10
+            minimum-idle: 2
+            connection-timeout: 30000
+            idle-timeout: 60000
+            max-lifetime: 180000
+            # -1：数据库连不上时不阻塞启动
+            initialization-fail-timeout: -1
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    # 打印执行的 SQL，便于排查同步过程
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+
+# ==================== 同步任务配置 ====================
+data-sync:
+  # 模式：db = 方案二（直连数据库同步）；api = 方案一（客户端消费分页接口）
+  mode: db
+  # 每批同步条数
+  batch-size: 1000
+  # 失败后的最大重试次数（首次 + 3 次重试 = 最多 4 次尝试）
+  max-retry-times: 3
+  # 重试间隔基数（毫秒），第 n 次重试等待 retry-interval-ms * n
+  retry-interval-ms: 2000
+  # 只同步指定的 relevant_id，留空表示同步全部
+  relevant-id:
+  # 启动后是否自动执行一次
+  auto-run-on-startup: false
+  # 命令行触发同步后是否退出进程
+  exit-after-run: true
+  # 定时任务
+  schedule-enabled: false
+  cron: "0 0 3 * * ?"
+  # 写入同步记录表的标识
+  source-system: spic
+  biz-type: proj_biz_dm_stg_m
+  source:
+    schema: spic_base
+    table: proj_biz_dm_stg_m
+    file-schema: dws_dsjsj
+    file-table: con_file_upload
+  target:
+    schema: ods_dsjsj
+    file-info-table: ods_dsjsj_file_info
+    record-table: ods_dsjsj_file_sync_record
+  api:
+    base-url: http://127.0.0.1:13607
+    page-size: 1000
+    connect-timeout-ms: 5000
+    read-timeout-ms: 60000
+
+logging:
+  level:
+    root: info
+    com.hd.sync: info

@@ -70,6 +70,13 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Prometheus 指标：/actuator/prometheus 暴露 JVM/应用/数据库 HikariCP 等指标，
+             供 k8s ServiceMonitor / Prometheus Operator 采集做运行监控告警 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>

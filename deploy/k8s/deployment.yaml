@@ -9,6 +9,13 @@ spec:
   # 数据同步单实例即可：应用内已用锁保证同一时刻只有一个任务在跑，
   # 多副本会并发触发同步，因此不建议 > 1。
   replicas: 1
+  # 单副本场景下，滚动更新时必须保证实例在线——maxUnavailable=0 表示更新期间不允许中断。
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  revisionHistoryLimit: 5
   selector:
     matchLabels:
       app: aifaizhi-data-sync
@@ -18,6 +25,12 @@ spec:
         app: aifaizhi-data-sync
     spec:
       restartPolicy: Always
+      # Pod 安全上下文：非 root 用户运行，禁止权限提升
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: aifaizhi-data-sync
           # 推送到私有仓库后替换为完整地址，如 registry.example.com/aifaizhi/aifaizhi-data-sync:0.0.1-SNAPSHOT
@@ -27,6 +40,12 @@ spec:
             - name: http
               containerPort: 13607
               protocol: TCP
+          # 容器安全上下文
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # 需要写 /app/logs
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: TZ
               value: Asia/Shanghai
@@ -42,30 +61,53 @@ spec:
                 secretKeyRef:
                   name: aifaizhi-data-sync-secret
                   key: szsjzzkk-password
-          # 探针说明：
-          #   startup  : JVM 启动较慢，给足启动宽限期，启动成功后才接管 liveness
-          #   liveness : 只判活（不查 DB），避免 DB 抖动导致 Pod 被反复杀死
-          #   readiness: 就绪状态，未就绪时 Service 不会转发流量
+
+          # ================================================================
+          # 三级探针 + 业务级探针：保证"进程活着"、"JVM 启动完成"、"业务通路正常"三层检测
+          #
+          #   startupProbe   → 宽限期内只判启动，启动成功后才移交 liveness，
+          #                     避免 JVM 启动慢被误杀
+          #   livenessProbe  → 进程存活（actuator liveness），不碰 DB，
+          #                     DB 抖动不应杀掉 Pod
+          #   readinessProbe → 业务通路（exec 调 /api/sync/task/status），
+          #                     DB 不可达 / 线程池拒绝都会让 readiness 失败，
+          #                     Service 自动摘掉流量；DB 恢复后自动上线
+          # ================================================================
           startupProbe:
             httpGet:
               path: /actuator/health/liveness
               port: 13607
+            # 10s × 20 次 = 200s 宽限期，足够 JVM 冷启动 + 首次类加载
             periodSeconds: 10
-            failureThreshold: 30
+            failureThreshold: 20
+            timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
               port: 13607
             periodSeconds: 30
-            timeoutSeconds: 3
+            timeoutSeconds: 5
             failureThreshold: 3
+            initialDelaySeconds: 30
           readinessProbe:
-            httpGet:
-              path: /actuator/health/readiness
-              port: 13607
+            # 用 exec 探针调业务接口 + grep 关键字：
+            # - actuator readiness 只反映应用可用（不查 DB）
+            # - 业务接口 /api/sync/task/status 必须返回合法 JSON 才算"真的就绪"
+            #   （被网关/负载均衡识别为健康节点）
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  # 先看业务接口能否在 5s 内返回合法 JSON
+                  body=$(curl -fsS -m 5 http://127.0.0.1:13607/api/sync/task/status 2>/dev/null) || exit 1
+                  echo "$body" | grep -qE '"running"|,"success"' || exit 1
+                  exit 0
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 8
             failureThreshold: 3
+            initialDelaySeconds: 20
+
           resources:
             requests:
               cpu: 200m
@@ -73,6 +115,7 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
+
           volumeMounts:
             # 单文件挂载：用 subPath 只覆盖 application.yml，不影响容器内其它文件
             - name: config
@@ -81,6 +124,7 @@ spec:
               readOnly: true
             - name: logs
               mountPath: /app/logs
+
       volumes:
         - name: config
           configMap:

@@ -97,11 +97,15 @@ logging:
 management:
   endpoints:
     web:
+      # health + info + prometheus 供 k8s 探针与监控系统使用
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       show-details: always
       show-components: always
       probes:
         enabled: true
+  metrics:
+    tags:
+      app: aifaizhi-data-sync

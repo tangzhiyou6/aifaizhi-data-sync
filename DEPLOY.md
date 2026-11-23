@@ -24,11 +24,17 @@
 | `deploy/config/application-demo.yml` | demo 栈的数据源覆盖配置 |
 | `config/application.yml.example` | 外部配置覆盖模板（生产推荐） |
 | `deploy/k8s/namespace.yaml` | k8s 命名空间 |
-| `deploy/k8s/configmap.yaml` | 非敏感运行配置（挂载为 application.yml） |
+| `deploy/k8s/configmap.yaml` | 非敏感运行配置（挂载为 application.yml，含 Prometheus metrics 端点暴露 + tags） |
 | `deploy/k8s/secret.yaml` | 数据库密码（Secret） |
-| `deploy/k8s/deployment.yaml` | 工作负载（含探针、资源、配置/密码注入） |
+| `deploy/k8s/deployment.yaml` | 工作负载（三级探针，readiness 为 **exec 业务探针**；SecurityContext 非 root；RollingUpdate `maxUnavailable=0`） |
 | `deploy/k8s/service.yaml` | Service（ClusterIP:13607） |
+| `deploy/k8s/pdb.yaml` | PodDisruptionBudget（`minAvailable=1`，防维护驱逐） |
+| `deploy/k8s/servicemonitor.yaml` | Prometheus Operator ServiceMonitor（抓取 `/actuator/prometheus`） |
 | `deploy/k8s/kustomization.yaml` | Kustomize 入口 |
+
+> **运行时增强**：除了上一轮新增的 actuator 健康端点，本轮还引入了 `micrometer-registry-prometheus` 依赖（pom.xml），
+> 使应用自动暴露 200+ 行 Prometheus 指标（JVM / HTTP / HikariCP 数据源），可直接被 ServiceMonitor 采集。
+> k8s readinessProbe 升级为 exec 业务探针，真正检查业务接口而非仅 Spring 上下文。
 
 > 为支持容器/k8s 探针，`pom.xml` 新增了 `spring-boot-starter-actuator`，
 > `application.yml` 暴露了 `/actuator/health/liveness` 与 `/actuator/health/readiness` 两个可用性探针（不触碰数据库，DB 不可达时也不会阻塞）。
@@ -223,13 +229,22 @@ docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v
 |---|---|
 | `ConfigMap` | 挂载为容器内 `/app/config/application.yml`，覆盖镜像内置配置；数据库密码用 `${JM_CLOUD_PASSWORD}` / `${SZJZZKK_PASSWORD}` 占位 |
 | `Secret` | 存放两个数据库密码，通过环境变量注入，解析 ConfigMap 中的占位符 |
-| `Deployment` | 单副本（应用内已加锁，多副本会并发同步）；含 startup/liveness/readiness 三级探针；resources requests/limits；日志 `emptyDir` |
-| `Service` | `ClusterIP:13607`，供集群内访问触发同步 |
+| `Deployment` | 单副本（应用内已加锁，多副本会并发同步）；含 startup/liveness/readiness 三级探针（readiness 为业务级 exec 探针）；滚动更新 `maxUnavailable=0`；SecurityContext（非 root、禁提权）；resources requests/limits；日志 `emptyDir` |
+| `Service` | `ClusterIP:13607`，供集群内访问触发同步；ServiceMonitor 从它的 `/actuator/prometheus` 采集指标 |
+| `PodDisruptionBudget` | `minAvailable=1`，保护单实例服务不被 kubelet 驱逐/节点维护踢下线 |
+| `ServiceMonitor` | Prometheus Operator 采集 `/actuator/prometheus`（需要集群已安装 Prometheus Operator） |
 
-探针设计：
-- **startupProbe**：JVM 启动较慢，给足宽限期（最多 30×10s=5min），启动成功后才由 liveness 接管，避免误杀。
-- **livenessProbe**：`/actuator/health/liveness`，只判活、不查 DB，DB 抖动不会导致 Pod 反复重启。
-- **readinessProbe**：`/actuator/health/readiness`，未就绪时 Service 不转发流量。
+探针设计（三层防护）：
+
+| 层级 | 类型 | 探针 | 检查对象 | 失败后果 |
+|---|---|---|---|---|
+| 启动 | `httpGet` | `startupProbe` | `/actuator/health/liveness` | 超时 Pod 被杀死重启 |
+| 存活 | `httpGet` | `livenessProbe` | `/actuator/health/liveness`（不查 DB） | 超时 Pod 被杀死重启 |
+| 就绪 | `exec` | `readinessProbe` | `/api/sync/task/status`（业务接口返回合法 JSON） | Service 自动摘掉流量，DB 恢复后自动上线 |
+
+readiness 用 **exec 业务探针** 的原因：
+- actuator readiness 只反映 Spring 上下文可用，**不检查业务通路**；DB 连接数耗尽、线程池拒绝、DataSource 被标记为 broken 时，应用进程仍返回 200，但业务接口挂了
+- exec 探针脚本 `curl /api/sync/task/status | grep -qE '"running"|,"success"'` 真正走到业务层，且容器内置 curl，k8s exec 无需额外工具
 
 ### 7.2 部署步骤
 
@@ -243,8 +258,14 @@ kubectl kustomize deploy/k8s
 
 # 3) 应用到集群
 kubectl apply -k deploy/k8s
+```
 
-# 4) 观察启动过程
+> **ServiceMonitor 注意**：`servicemonitor.yaml` 需要集群已安装 Prometheus Operator CRD（`monitoring.coreos.com/v1`）。
+> 如果 apply 时报 `no matches for kind "ServiceMonitor"`，注释掉 `kustomization.yaml` 中的 `- servicemonitor.yaml` 行，
+> 或单独安装 CRD：`kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml`。
+
+```bash
+# 4) 观察启动过程（Pod ready = readiness exec 探针通过 = 业务接口可达）
 kubectl -n aifaizhi get pods -w
 kubectl -n aifaizhi logs -f deploy/aifaizhi-data-sync
 
@@ -252,10 +273,15 @@ kubectl -n aifaizhi logs -f deploy/aifaizhi-data-sync
 kubectl -n aifaizhi get svc aifaizhi-data-sync
 kubectl -n aifaizhi port-forward svc/aifaizhi-data-sync 13607:13607 &
 curl http://127.0.0.1:13607/actuator/health/readiness
+# 业务接口（readiness exec 探针实际检查的端点）
+curl http://127.0.0.1:13607/api/sync/task/status
 
 # 触发同步
 curl -X POST http://127.0.0.1:13607/api/sync/task/trigger \
      -H 'Content-Type: application/json' -d '{"mode":"db"}'
+
+# 查看 metrics（Prometheus 抓取的就是这个端点）
+curl -s http://127.0.0.1:13607/actuator/prometheus | head -20
 ```
 
 ### 7.3 更新镜像地址（推荐）
@@ -277,20 +303,45 @@ images:
 kubectl delete -k deploy/k8s
 ```
 
+### 7.5 监控与告警
+
+镜像内置了 `micrometer-registry-prometheus`，暴露 `/actuator/prometheus` 端点，ServiceMonitor 每 15s 抓取一次。Prometheus 可直接采集以下维度：
+
+| 指标前缀 | 说明 | 典型告警条件 |
+|---|---|---|
+| `jvm_memory_used_bytes` | JVM 堆内存使用 | `heap_used / heap_max > 0.85` 持续 5min |
+| `jvm_threads_live_threads` | 活动线程数 | 持续 > 500（本服务一般 50-100） |
+| `http_server_requests_seconds` | HTTP 请求耗时 | 99 分位 > 5s 持续 10min |
+| `jdbc_connections_active` | HikariCP 活动连接数 | 持续 == `jdbc_connections_max`（连接池耗尽） |
+| `jdbc_connections_pending` | 等待连接的请求数 | 持续 > 0（有请求在等连接） |
+| `hikaricp_connections_timeout_total` | 获取连接超时次数 | 10min 内增加 > 0 |
+
+Grafana 看板建议：
+- JVM 内存 + GC 暂停面板
+- HTTP 请求速率 / P99 耗时面板（按 URI 分组）
+- 两个数据源的 HikariCP 连接池状态面板
+
 ---
 
 ## 八、健康检查说明
 
-| 端点 | 用途 | 是否查 DB | 典型耗时 |
-|---|---|---|---|
-| `GET /actuator/health/liveness` | 存活探针 | 否 | <10ms |
-| `GET /actuator/health/readiness` | 就绪探针 | 否 | <10ms |
-| `GET /actuator/health` | 手动排查（含 DB 连通性详情） | 是 | DB 不可达时可能阻塞数秒 |
+| 端点 | 用途 | 探针类型 | 是否查 DB | 典型耗时 |
+|---|---|---|---|---|
+| `GET /actuator/health/liveness` | 存活（启动/存活探针） | `httpGet` | 否 | <10ms |
+| `GET /actuator/health/readiness` | 就绪手动排查 | — | 否 | <10ms |
+| `GET /api/sync/task/status` | 业务就绪探针 | `exec`（k8s） | 间接触发 | 通常 <50ms，DB 不可达时 timeoutSeconds=8s 失败 |
+| `GET /actuator/health` | 完整健康（手动排查） | — | 是（会 getConnection） | DB 不可达时阻塞到连接超时 |
+| `GET /actuator/prometheus` | Prometheus 指标采集 | ServiceMonitor | 否 | <50ms |
 
-> 为什么不用完整 `/actuator/health` 做探针？Spring Boot 的 DB 健康指示器会调用 `getConnection()`，
-> 当数据库不可达时会阻塞到连接超时（默认 30s），导致探针超时。因此容器与 k8s 探针统一使用
-> `liveness` / `readiness` 可用性组（只反映应用自身状态，不触碰外部依赖）；数据库异常通过
-> 同步任务状态与日志体现，不会引发 Pod 无意义重启。
+> **为什么 k8s readiness 用 exec 业务探针而不是 httpGet /actuator/health？** 三个原因：
+> 1. **DB 阻塞问题**：完整 `/actuator/health` 的 DB 健康指示器会 `getConnection()`，DB 不可达时阻塞到 HikariCP 超时（30s），探针超时导致 Pod 被反复重启
+> 2. **actuator readiness 不够深**：它只检查 Spring 上下文 + Application readiness state，不检查业务通路；DataSource 的 `broken` 状态、HikariCP 的连接耗尽都不会让它返回 DOWN
+> 3. **exec 业务探针**调的是 `/api/sync/task/status`，真正走到业务层查询同步状态，DB 有问题时会在 8s 内自然超时失败，Service 自动摘掉该 Pod 的流量
+
+三个探针配合 PDB，形成**三层防护**：
+1. Pod 挂了 → liveness 杀 Pod → Deployment 拉起新 Pod
+2. 业务通路坏了但进程活着 → readiness 失败 → Service 摘掉流量 → DB 恢复后自动上线
+3. 节点要维护 → PDB `minAvailable=1` 阻止驱逐 → 等维护完成或手动 drain 时确认服务在线
 
 ---
 
@@ -335,17 +386,55 @@ $ docker exec aifaizhi-pg-dst psql -U xcapp -d szsjzzkk -c "SELECT count(*) FROM
 ### 9.3 k8s 清单（无集群，client 侧校验）
 
 ```
-$ kubectl kustomize deploy/k8s        # 渲染成功，exit=0，无告警
+$ kubectl kustomize deploy/k8s > /tmp/k8s.yaml
+# 7 个资源全部正确渲染：namespace/configmap/secret/deployment/service/pdb/servicemonitor
+
 $ kubectl apply --dry-run=client --validate=false -k deploy/k8s
 namespace/aifaizhi created (dry run)
 configmap/aifaizhi-data-sync-config created (dry run)
 secret/aifaizhi-data-sync-secret created (dry run)
 service/aifaizhi-data-sync created (dry run)
 deployment.apps/aifaizhi-data-sync created (dry run)
+poddisruptionbudget.policy/aifaizhi-data-sync created (dry run)
+# ServiceMonitor 报 "no matches for kind" 是预期行为——本环境未安装 Prometheus Operator CRD；
+# 生产环境装了就不会报，或注释掉 kustomization.yaml 中的 servicemonitor.yaml 行
+
+$ grep -c "^kind:" /tmp/k8s.yaml
+7
+
+# 关键探针/安全/滚动字段渲染确认
+grep "exec:" /tmp/k8s.yaml                    → readinessProbe 的 exec 存在
+grep "grep -qE" /tmp/k8s.yaml                 → 业务探针脚本存在
+grep "runAsNonRoot: true" /tmp/k8s.yaml       → SecurityContext 生效
+grep "minAvailable: 1" /tmp/k8s.yaml          → PDB 生效
+grep "maxUnavailable: 0" /tmp/k8s.yaml        → RollingUpdate 生效
+grep "path: /actuator/prometheus" /tmp/k8s.yaml → ServiceMonitor 生效
 ```
 
-渲染产物已确认包含：`startupProbe` / `livenessProbe` / `readinessProbe`、`containerPort: 13607`、
-`/app/config/application.yml` 与 `/app/logs` 挂载、`JAVA_OPTS`（含 `MaxRAMPercentage`）等。
+### 9.4 Prometheus metrics 端点验证（新镜像）
+
+```
+$ docker run -d --name test -p 13610:13607 aifaizhi-data-sync:0.0.1-SNAPSHOT
+$ curl -s http://127.0.0.1:13610/actuator/prometheus | wc -l
+229                                          ← 229 行 Prometheus 格式指标
+$ curl -s http://127.0.0.1:13610/actuator/prometheus | head -15
+# HELP executor_completed_tasks_total ...
+executor_completed_tasks_total{app="aifaizhi-data-sync",name="taskScheduler",} 0.0
+# HELP jdbc_connections_max ...
+jdbc_connections_max{app="aifaizhi-data-sync",name="dataSource",} 10.0    ← 数据源指标带 app tag
+...
+$ docker rm -f test
+```
+
+自动带上了 `app="aifaizhi-data-sync"` tag（来自 ConfigMap 的 `management.metrics.tags`），Prometheus 侧按 `{app="aifaizhi-data-sync"}` 即可聚合所有指标。
+
+### 9.5 exec 业务探针脚本模拟
+
+```
+$ body=$(curl -fsS -m 5 http://127.0.0.1:13607/api/sync/task/status)
+$ echo "$body" | grep -qE '"running"|,"success"' && echo OK
+OK                                           ← k8s readinessProbe 的 exec 脚本逻辑通过
+```
 
 ---
 

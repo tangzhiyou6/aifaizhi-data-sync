@@ -97,11 +97,17 @@ data:
     management:
       endpoints:
         web:
+          # health + info + prometheus 供 k8s 探针与监控系统使用
           exposure:
-            include: health,info
+            include: health,info,prometheus
       endpoint:
         health:
           show-details: always
           show-components: always
           probes:
             enabled: true
+      metrics:
+        # 统一打标签，Prometheus 聚合时好按应用/实例过滤
+        tags:
+          app: aifaizhi-data-sync
+          namespace: aifaizhi

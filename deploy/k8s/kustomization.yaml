@@ -10,6 +10,10 @@ resources:
   - secret.yaml
   - deployment.yaml
   - service.yaml
+  - pdb.yaml
+  # ServiceMonitor 依赖 Prometheus Operator CRD；未安装 operator 时注释掉本行，
+  # 或把它放进 deploy/k8s/overlays/prod/ 再按需 apply
+  - servicemonitor.yaml
 
 # 统一标签（labels 会同时写入资源 metadata 与 selector/template）
 labels:

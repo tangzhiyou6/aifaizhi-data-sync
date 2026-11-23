@@ -1,0 +1,14 @@
+# PodDisruptionBudget：保护单实例服务不被集群维护操作（如节点升级/驱逐）主动踢下线。
+# 集群需要至少 1 个 Pod 在线，kubeadm/drain/节点维护时会等 PDB 放开（drain 会等待）。
+# 注意：PDB 只阻止 "voluntary disruption"（kubelet 驱逐/维护），不阻止硬件故障/应用崩溃/手动 delete。
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aifaizhi-data-sync
+  namespace: aifaizhi
+spec:
+  # minAvailable=1 与 replicas=1 搭配，保证维护时不会让服务完全下线
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: aifaizhi-data-sync

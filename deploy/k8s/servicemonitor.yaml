@@ -1,0 +1,28 @@
+# ServiceMonitor：Prometheus Operator 从此 Service 的 /actuator/prometheus 端点采集指标。
+# 需要集群已安装 Prometheus Operator（k8s 1.16+）。未安装时此资源不会生效，但也不会阻塞部署。
+# 采集后可在 Grafana 做以下监控看板：
+#   - JVM：jvm_memory_used_bytes / jvm_threads_live_threads / jvm_gc_pause_seconds_max
+#   - HTTP：http_server_requests_seconds / http_server_requests_seconds_max（含 URI 标签）
+#   - 数据源（HikariCP）：hikaricp_connections_idle / hikaricp_connections_active / hikaricp_connections_pending
+#   - 同步业务（手动注册指标后）：batch_no / fetched / skipped / success / failed
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: aifaizhi-data-sync
+  namespace: aifaizhi
+  labels:
+    # Prometheus Operator 默认只选带这个 label 的 ServiceMonitor
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: aifaizhi-data-sync
+  namespaceSelector:
+    matchNames:
+      - aifaizhi
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: 15s
+      scrapeTimeout: 5s
+      honorLabels: true

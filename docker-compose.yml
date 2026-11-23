@@ -1,0 +1,36 @@
+# =============================================================================
+# aifaizhi-data-sync 生产编排（应用本身，连接外部 PostgreSQL）
+# 使用：
+#   docker compose up -d --build          # 构建并后台启动
+#   docker compose logs -f                # 查看日志
+#   docker compose down                   # 停止并移除容器（保留数据卷）
+# 说明：
+#   - 数据库为外部依赖，通过 ./config/application.yml 覆盖连接信息（见 DEPLOY.md）
+#   - 如需本地一键拉起「源库+目标库+应用」完整演示栈，见 docker-compose.demo.yml
+# =============================================================================
+services:
+  aifaizhi-data-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aifaizhi-data-sync:0.0.1-SNAPSHOT
+    container_name: aifaizhi-data-sync
+    ports:
+      - "13607:13607"
+    environment:
+      TZ: Asia/Shanghai
+      # 可在此覆盖 JVM 参数；镜像已内置默认值
+      # JAVA_OPTS: "-XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -Xms512m -Xmx1024m"
+      # 激活本地联调配置（连接外部 PG 时不要打开，改用下方 config 目录覆盖）
+      # SPRING_PROFILES_ACTIVE: local
+    volumes:
+      - ./logs:/app/logs
+      # 可选：把自定义 application.yml 放到 ./config 下，覆盖镜像内置配置（生产推荐）
+      - ./config:/app/config:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:13607/actuator/health/liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

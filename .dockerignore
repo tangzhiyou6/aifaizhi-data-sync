@@ -1,0 +1,22 @@
+# 构建产物
+target/
+logs/
+*.log
+
+# 版本控制 / IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# 本地环境
+.sdkmanrc
+.env
+deploy/docker-run.env
+
+# 文档（不参与镜像构建）
+README.md
+DEPLOY.md
+docs/

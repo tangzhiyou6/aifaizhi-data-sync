@@ -1,0 +1,71 @@
+# =============================================================================
+# 本地端到端演示栈：源库 jm_cloud + 目标库 szsjzzkk + 同步应用
+# 使用：
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --build
+# 验证步骤见 DEPLOY.md「五、本地端到端验证（docker-compose demo 栈）」
+# 清理（含数据卷）：
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v
+# =============================================================================
+services:
+  # 源端库：自动灌入 init/init-src-test-data.sql（3000 文件 + 2301 关联 + 脏数据）
+  aifaizhi-pg-src:
+    image: postgres:16
+    container_name: aifaizhi-pg-src
+    environment:
+      POSTGRES_USER: dsjsj
+      POSTGRES_PASSWORD: srcpass
+      POSTGRES_DB: jm_cloud
+      TZ: Asia/Shanghai
+    volumes:
+      - aifaizhi-src-pgdata:/var/lib/postgresql/data
+      - ./init/init-src-test-data.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dsjsj -d jm_cloud"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # 目标库：自动执行 init/init-pg-sql.sql（建落地表 + 同步记录表）
+  aifaizhi-pg-dst:
+    image: postgres:16
+    container_name: aifaizhi-pg-dst
+    environment:
+      POSTGRES_USER: xcapp
+      POSTGRES_PASSWORD: dstpass
+      POSTGRES_DB: szsjzzkk
+      TZ: Asia/Shanghai
+    volumes:
+      - aifaizhi-dst-pgdata:/var/lib/postgresql/data
+      - ./init/init-pg-sql.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xcapp -d szsjzzkk"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # 同步应用：以 local profile 启动，连接上述两个容器化 PG
+  aifaizhi-data-sync:
+    depends_on:
+      aifaizhi-pg-src:
+        condition: service_healthy
+      aifaizhi-pg-dst:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Shanghai
+      SPRING_PROFILES_ACTIVE: local
+    # !override：覆盖 docker-compose.yml 中的 volumes 列表，避免 base 的 ./config 目录挂载
+    # 与本文件的单文件挂载在 /app/config 下冲突（只读目录内无法再创建挂载点）。
+    volumes: !override
+      - ./logs:/app/logs
+      # 用容器内主机名覆盖数据源地址，挂载为 application-local.yml
+      - ./deploy/config/application-demo.yml:/app/config/application-local.yml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:13607/actuator/health/liveness"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  aifaizhi-src-pgdata:
+  aifaizhi-dst-pgdata:

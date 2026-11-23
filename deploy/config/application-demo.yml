@@ -1,0 +1,24 @@
+# 本地 demo 栈专用配置：数据源指向 docker-compose.demo.yml 中的两个 PG 容器。
+# 该文件被挂载为容器内 /app/config/application-local.yml，配合 SPRING_PROFILES_ACTIVE=local 生效。
+server:
+  port: 13607
+
+spring:
+  datasource:
+    dynamic:
+      datasource:
+        jm_cloud:
+          url: jdbc:postgresql://aifaizhi-pg-src:5432/jm_cloud?currentSchema=dws_dsjsj
+          username: dsjsj
+          password: srcpass
+        szsjzzkk:
+          url: jdbc:postgresql://aifaizhi-pg-dst:5432/szsjzzkk?currentSchema=xcapp
+          username: xcapp
+          password: dstpass
+
+data-sync:
+  mode: db
+  batch-size: 1000
+  retry-interval-ms: 500
+  api:
+    base-url: http://127.0.0.1:13607

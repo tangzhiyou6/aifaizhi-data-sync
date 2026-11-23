@@ -7,6 +7,9 @@ SPIC 附件元数据增量同步服务：把源端库 `jm_cloud` 的 `spic_base.
 - 多数据源：`@DS("jm_cloud")` 读源库，`@DS("szsjzzkk")` 写目标库
 - 批次：每批 1000 条；失败自动重试 3 次；失败记录落库，下次任务重投
 
+> **容器化部署**：`docker run` 脚本、`docker-compose`、`Kubernetes` 三种部署方式及验证步骤，
+> 详见 [DEPLOY.md](./DEPLOY.md)。
+
 ## 一、数据流
 
 ```

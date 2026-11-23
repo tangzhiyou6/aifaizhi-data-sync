@@ -108,3 +108,19 @@ logging:
   level:
     root: info
     com.hd.sync: info
+
+# ==================== 健康检查（容器 / k8s 探针） ====================
+management:
+  endpoints:
+    web:
+      exposure:
+        # 只暴露 health / info，避免暴露敏感端点
+        include: health,info
+  endpoint:
+    health:
+      # 手动排查时可看到详细状态（含数据库连通性）
+      show-details: always
+      show-components: always
+      # 始终暴露 liveness / readiness 两个可用性探针组（容器化部署必须）
+      probes:
+        enabled: true

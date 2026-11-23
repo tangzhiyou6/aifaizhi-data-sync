@@ -1,0 +1,26 @@
+# Kustomize 清单入口：kubectl apply -k deploy/k8s
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aifaizhi
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - deployment.yaml
+  - service.yaml
+
+# 统一标签（labels 会同时写入资源 metadata 与 selector/template）
+labels:
+  - pairs:
+      app.kubernetes.io/name: aifaizhi-data-sync
+      app.kubernetes.io/part-of: aifaizhi-data-sync
+    includeSelectors: false
+
+# 推送镜像到私有仓库后，取消注释并修改 newName / newTag，
+# 即可一次性替换 deployment 中的镜像地址，无需手动改 yaml。
+# images:
+#   - name: aifaizhi-data-sync
+#     newName: registry.example.com/aifaizhi/aifaizhi-data-sync
+#     newTag: 0.0.1-SNAPSHOT

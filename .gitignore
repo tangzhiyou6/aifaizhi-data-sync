@@ -5,3 +5,8 @@ logs/
 *.iml
 .vscode/
 .DS_Store
+
+# 本地 / 生产敏感配置（含真实数据库密码，勿提交）
+config/application.yml
+deploy/docker-run.env
+.env

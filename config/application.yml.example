@@ -1,0 +1,107 @@
+# =============================================================================
+# 外部配置覆盖模板（生产推荐用法）
+# 用法：
+#   cp config/application.yml.example config/application.yml
+#   修改其中的数据库地址 / 账号 / 密码等，再启动容器。
+# 该文件会被挂载到容器 /app/config/application.yml，覆盖镜像内置的同名配置，
+# 因此无需重新构建镜像即可切换环境。
+# 注意：config/application.yml 含敏感信息，已在 .gitignore 中忽略，不要提交。
+# =============================================================================
+server:
+  port: 13607
+
+spring:
+  application:
+    name: aifaizhi-data-sync
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+    deserialization:
+      fail-on-unknown-properties: false
+
+  datasource:
+    dynamic:
+      primary: jm_cloud
+      strict: true
+      lazy: true
+      aop:
+        order: -2147483648
+      datasource:
+        jm_cloud:
+          driver-class-name: org.postgresql.Driver
+          url: jdbc:postgresql://<源库主机>:5432/jm_cloud?currentSchema=dws_dsjsj
+          username: <源库账号>
+          password: <源库密码>
+          hikari:
+            pool-name: jm-cloud-pool
+            maximum-pool-size: 10
+            minimum-idle: 2
+            connection-timeout: 30000
+            idle-timeout: 60000
+            max-lifetime: 180000
+            initialization-fail-timeout: -1
+        szsjzzkk:
+          driver-class-name: org.postgresql.Driver
+          url: jdbc:postgresql://<目标库主机>:5432/szsjzzkk?currentSchema=xcapp
+          username: <目标库账号>
+          password: <目标库密码>
+          hikari:
+            pool-name: szsjzzkk-pool
+            maximum-pool-size: 10
+            minimum-idle: 2
+            connection-timeout: 30000
+            idle-timeout: 60000
+            max-lifetime: 180000
+            initialization-fail-timeout: -1
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+
+data-sync:
+  mode: db
+  batch-size: 1000
+  max-retry-times: 3
+  retry-interval-ms: 2000
+  relevant-id:
+  auto-run-on-startup: false
+  exit-after-run: true
+  schedule-enabled: false
+  cron: "0 0 3 * * ?"
+  source-system: spic
+  biz-type: proj_biz_dm_stg_m
+  source:
+    schema: spic_base
+    table: proj_biz_dm_stg_m
+    file-schema: dws_dsjsj
+    file-table: con_file_upload
+  target:
+    schema: ods_dsjsj
+    file-info-table: ods_dsjsj_file_info
+    record-table: ods_dsjsj_file_sync_record
+  api:
+    base-url: http://127.0.0.1:13607
+    page-size: 1000
+    connect-timeout-ms: 5000
+    read-timeout-ms: 60000
+
+logging:
+  level:
+    root: info
+    com.hd.sync: info
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+      probes:
+        enabled: true

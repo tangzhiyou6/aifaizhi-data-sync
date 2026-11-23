@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aifaizhi-data-sync
+  namespace: aifaizhi
+  labels:
+    app: aifaizhi-data-sync
+spec:
+  # 数据同步单实例即可：应用内已用锁保证同一时刻只有一个任务在跑，
+  # 多副本会并发触发同步，因此不建议 > 1。
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aifaizhi-data-sync
+  template:
+    metadata:
+      labels:
+        app: aifaizhi-data-sync
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: aifaizhi-data-sync
+          # 推送到私有仓库后替换为完整地址，如 registry.example.com/aifaizhi/aifaizhi-data-sync:0.0.1-SNAPSHOT
+          image: aifaizhi-data-sync:0.0.1-SNAPSHOT
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 13607
+              protocol: TCP
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+            - name: JAVA_OPTS
+              value: "-XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
+            - name: JM_CLOUD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aifaizhi-data-sync-secret
+                  key: jm-cloud-password
+            - name: SZJZZKK_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aifaizhi-data-sync-secret
+                  key: szsjzzkk-password
+          # 探针说明：
+          #   startup  : JVM 启动较慢，给足启动宽限期，启动成功后才接管 liveness
+          #   liveness : 只判活（不查 DB），避免 DB 抖动导致 Pod 被反复杀死
+          #   readiness: 就绪状态，未就绪时 Service 不会转发流量
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 13607
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 13607
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 13607
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            # 单文件挂载：用 subPath 只覆盖 application.yml，不影响容器内其它文件
+            - name: config
+              mountPath: /app/config/application.yml
+              subPath: application.yml
+              readOnly: true
+            - name: logs
+              mountPath: /app/logs
+      volumes:
+        - name: config
+          configMap:
+            name: aifaizhi-data-sync-config
+        - name: logs
+          emptyDir: {}
